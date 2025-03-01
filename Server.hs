@@ -1,5 +1,8 @@
 import Network.Socket
 import System.IO
+import Data.List (isPrefixOf)
+import Control.Monad (when)
+import Text.Printf (printf)
 
 main :: IO ()
 main = withSocketsDo $ do
@@ -32,5 +35,21 @@ acceptLoop sock = do
 handleConnection :: Socket -> IO ()
 handleConnection conn = do
     h <- socketToHandle conn ReadWriteMode
-    hPutStrLn h "Welcome to your local IRC server!"
-    hClose h
+    hSetBuffering h LineBuffering
+    hPutStrLn h ":server 001 Welcome to your local IRC server!"
+    putStrLn "Client connected."
+    processMessages h
+
+processMessages :: Handle -> IO ()
+processMessages h = do
+    eof <- hIsEOF h
+    if eof
+        then putStrLn "Client disconnected." >> hClose h
+        else do
+            line <- hGetLine h
+            putStrLn $ "Received: " ++ line
+            when ("NICK" `isPrefixOf` line) $
+                 printf "Nickname %s registered.\n" line
+        
+            processMessages h
+
