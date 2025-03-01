@@ -13,6 +13,8 @@ import Control.Monad (replicateM)
 import qualified Data.Map as Map
 import Data.Maybe (fromMaybe)
 import Data.IORef
+import Data.Time.Clock.POSIX (getPOSIXTime, POSIXTime)
+import Text.Printf (printf)
 
 -- Configuration options
 myServer = "192.168.0.151" :: String
@@ -26,11 +28,15 @@ gamesRef :: IORef GameState
 {-# NOINLINE gamesRef #-}
 gamesRef = unsafePerformIO (newIORef Map.empty)
 
+{-# NOINLINE botStartTime #-}
+botStartTime :: IORef POSIXTime
+botStartTime = unsafePerformIO (getPOSIXTime >>= newIORef)
 
 -- Toplevel program
 main :: IO ()
 main = do
     h <- connectTo myServer myPort
+    getUptime >>= privmsg h
     write h "NICK" myNick
     write h "USER" (myNick ++ " 0 * :tutorial bot")
     waitForWelcome h  -- Wait until 001 message is received
@@ -88,6 +94,7 @@ eval h x | "!id " `isPrefixOf` x = privmsg h (drop 4 x)
 eval h x | "!bj" `isPrefixOf` x = startBlackjack h (drop 4 x)
 eval h x | "!hit" `isPrefixOf` x = playerHit h (drop 5 x)
 eval h x | "!stand" `isPrefixOf` x = playerStand h (drop 7 x)
+eval h "!uptime" = getUptime >>= privmsg h
 eval _ _ = return ()  -- ignore everything else
 
 -- Send a privmsg to the channel
@@ -103,43 +110,43 @@ startBlackjack h user = do
     hand <- replicateM 2 getRandomNumber  -- Get two random cards
     modifyIORef gamesRef (Map.insert user hand)
     let total = sum hand
-    privmsg h (user ++ ", you drew: " ++ show hand ++ ". Total: " ++ show total)
+    privmsg h ("you drew: " ++ show hand ++ ". Total: " ++ show total)
     if total == 21
-        then privmsg h (user ++ " Blackjack! You win!") >> endGame user
-        else privmsg h (user ++ " !hit or !stand?")
+        then privmsg h (user ++ "Blackjack! You win!") >> endGame user
+        else privmsg h (user ++ "!hit or !stand?")
 
 -- Player chooses to hit
 playerHit :: Handle -> String -> IO ()
 playerHit h user = do
     gameState <- readIORef gamesRef
     case Map.lookup user gameState of
-        Nothing -> privmsg h (user ++ " No active game. Start with !bj")
+        Nothing -> privmsg h "No active game. Start with !bj"
         Just hand -> do
             newCard <- getRandomNumber
             let newHand = hand ++ [newCard]
                 total = sum newHand
             modifyIORef gamesRef (Map.insert user newHand)
-            privmsg h (user ++ ", you drew: " ++ show newCard ++ ". Total: " ++ show total)
+            privmsg h ( "you drew: " ++ show newCard ++ ". Total: " ++ show total)
             if total > 21
-                then privmsg h (user ++ " Bust! You lose!") >> endGame user
-                else privmsg h (user ++ " Hit or Stand?")
+                then privmsg h "Bust! You lose!" >> endGame user
+                else privmsg h "!hit or !stand?"
 
 -- Player chooses to stand, dealer plays
 playerStand :: Handle -> String -> IO ()
 playerStand h user = do
     gameState <- readIORef gamesRef
     case Map.lookup user gameState of
-        Nothing -> privmsg h (user ++ " No active game. Start with !bj")
+        Nothing -> privmsg h "No active game. Start with !bj"
         Just playerHand -> do
             dealerHand <- playDealer []
             let playerTotal = sum playerHand
                 dealerTotal = sum dealerHand
             privmsg h ("Dealer drew: " ++ show dealerHand ++ ". Total: " ++ show dealerTotal)
             if dealerTotal > 21 || playerTotal > dealerTotal
-                then privmsg h (user ++ " You win!")
+                then privmsg h "You win!"
                 else if dealerTotal == playerTotal
-                    then privmsg h (user ++ " It's a tie!")
-                    else privmsg h (user ++ " Dealer wins!")
+                    then privmsg h "It's a tie!"
+                    else privmsg h "Dealer wins!"
             endGame user
 
 -- Dealer AI: Hits on any total below 17
@@ -155,3 +162,12 @@ playDealer hand = do
 -- End game, remove player from active games
 endGame :: String -> IO ()
 endGame user = modifyIORef gamesRef (Map.delete user)
+
+getUptime :: IO String
+getUptime = do
+    start <- readIORef botStartTime
+    now <- getPOSIXTime
+    let diff = now - start
+        seconds = round diff :: Int
+        (hours, minutes, secondsLeft) = (seconds `div` 3600, (seconds `mod` 3600) `div` 60, seconds `mod` 60)
+    return $ printf "Uptime: %02d:%02d:%02d (hh:mm:ss)" hours minutes secondsLeft
